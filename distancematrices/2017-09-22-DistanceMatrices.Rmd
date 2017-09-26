@@ -1,0 +1,212 @@
+---
+title: "Applied multivariate:  Distance matrices"
+output:
+  html_notebook: default
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Load the libraries we will use today
+
+```{r message = FALSE}
+library(tidyverse)
+library(vegan)
+```
+
+
+## Data standardizations (continued from [last week](https://chrischizinski.github.io/snr_r_notebooks/datatransformations/))
+
+### Maximums
+- Can be applied to any range of X
+- Outputs will range 0 to 1, largest values will scale to 1
+- Converts values to a relative value (equalizes the peak abundance)
+- Used when there is a difference in total abundance
+
+#### Rows
+
+- Tells us the relative relationship within a site
+- Species with the greatest abundance at a site will be 1
+
+```{r}
+rawdata<-matrix(c(1,1,1,3,3,1,
+                2,2,4,6,6,0,
+                10,10,20,30, 30,0,
+                3,3,2,1,1,0,
+                0,0,0,0,1,0,
+                0,0,0,0,20,0), 6, byrow =T)
+
+colnames(rawdata)<- paste("Species",letters[1:6], sep = "_")
+
+rowsum.data <- rawdata / apply(rawdata,1,sum)
+rowmax.data <- rawdata / apply(rawdata,1,max)
+```
+
+Let us compare the two transformations by plotting these out.  
+
+```{r}
+
+rowsum.df <- as.data.frame(rowsum.data)
+rowsum.df$type = "sum"
+rowsum.df$site = 1:nrow(rowsum.df)
+
+rowmax.df <- as.data.frame(rowmax.data)
+rowmax.df$type = "max"
+rowmax.df$site = 1:nrow(rowmax.df)
+
+rowall.df <- rbind(rowsum.df, rowmax.df )
+
+
+rowall.df %>% 
+  gather(Species, number, contains("Species")) -> rowall.long
+
+ggplot(data = rowall.long %>% filter(site %in% c(1,3,6))) + 
+  geom_bar(aes(x = Species, y = number, fill = type), stat = "identity", position = "dodge") + 
+  facet_wrap(~site, ncol = 1, scales = "free", labeller = label_both) +
+  coord_cartesian(ylim = c(0,1), xlim = c(0.5,6.5), expand = FALSE) +
+  theme_classic()
+
+```
+
+#### Columns
+
+- Tells us the relative relationship among species across sites
+- Site with the greatest abundance of a particular species will be 1
+
+```{r}
+colmax.data <- rawdata %*% diag(1/apply(rawdata,2,max))
+
+colmax.data
+
+# or use vegan::decostand()
+decostand(rawdata, method = "max", MARGIN = 2)
+```
+
+### Z-score standardization
+
+- Can be applied to any range of x
+- Output can be any value
+- Converts values to z scores (mean = 0, variance = 1)
+- Commonly used to put variables on equal scaling
+- Important to use when you variables that are at different scales or units of measurement
+- Tend to standardize across sites (i.e., by columns)
+
+To do this transformation, we subtract each element by the column mean and then divide by the column standard deviation. The result is a value representing the number of standard deviations from the mean.
+
+```{r}
+mvals<-apply(rawdata, 2, mean)
+sdvals<-apply(rawdata, 2, sd)
+
+centered <- sweep(rawdata, 2, colMeans(rawdata))
+sweep(centered, 2, sdvals, `/`)
+
+scale(rawdata, center = TRUE, scale = TRUE)
+
+decostand(rawdata, method = "standardize", MARGIN = 2)
+```
+
+### Normalization
+
+- Can be applied to any range of x
+- Output will range between 0 and 1
+- Important to use when some rows have large variance and some small
+- Common standardization in Principal Component Analysis (PCA)
+
+```{r}
+
+decostand(rawdata, method = "normalize")
+```
+
+### Hellinger standardization
+- Can be applied to any range of x
+- Output will be any value but tend to be below 1
+- Similar to the relativization by site
+- Hellinger distance has good statistical properties as assessed by the criteria of R<sup>2</sup> and monotonicity used by [Legendre and Gallagher (2001)](https://link.springer.com/article/10.1007%2Fs004420100716)
+
+In this standardization, each element is divided by its row sum. After that, the square root of each element is calculated.
+
+```{r}
+hell_data <- sqrt(rawdata / apply(rawdata,1,sum))
+
+hell_data
+
+decostand(rawdata, method = "hellinger")
+```
+
+### Wisonsin double standardization
+
+- Can be applied to value of x > 0
+- Output will range between 0 and 1
+- Equalize emphasis among sample units and among species
+- Difficult to understand individual data values after standardization
+
+In this standardization, each element is divided by its column maximum and then divided by the row total
+
+```{r}
+col.max<-apply(rawdata,2,max)
+
+wdt_data.1 <- rawdata %*% diag(1 /col.max)
+
+row.ttl<-apply(wdt_data.1,1,sum)
+
+wdt_data <- wdt_data.1 / row.ttl
+
+wdt_data
+
+wisconsin(rawdata)
+```
+
+## Similarity and distances
+
+To illustrate how the concept of similarity and distances, lets envision a data matrix with 4 sites and two species.  
+```{r}
+hyp_data <- matrix(c(1,9,1,8,6,6,9,1), byrow = TRUE, ncol = 2)
+colnames(hyp_data) <- c("Species_a", "Species_b")
+hyp_data
+```
+
+Lets plot the relationship of those species in 2-dimensional space.  
+
+```{r}
+ggplot(data = as.data.frame(hyp_data)) + 
+  geom_point(aes(x = Species_a, y = Species_b), size = 3, colour = "red") + 
+  geom_text(aes(x = Species_a, y = Species_b, label = paste("Site",1:4), hjust = -0.25)) +
+  coord_cartesian(xlim = c(0,10), ylim = c(0,10), expand = F) + 
+  theme_classic()
+```
+
+How can we quantify how similar each of these points are to each other?  One of the simplest method is to calculate the actual distance each point is from one another.
+
+
+```{r}
+euc_dist<- function(x,y){
+  h = sqrt(x^2 + y^2) #Pythagorean theorom 
+  return(h)
+}
+
+euc_dist(hyp_data[,"Species_a"], hyp_data[,"Species_b"])
+```
+
+Is this correct?  Sort of.  This function is not calculating all the distances we need.  We need to find the distances from all combinations.  Luckily, there is the `dist()` function.  
+
+```{r}
+dist(hyp_data)
+```
+
+```{r}
+
+poss<-as.matrix(expand.grid(c(1,2,3), c(2,3,4)))
+hyp_data[poss]
+
+ggplot(data = as.data.frame(hyp_data)) + 
+  geom_point(aes(x = Species_a, y = Species_b), size = 3, colour = "red") + 
+  geom_segment(data = hyp_data.dist[del==0,],aes(x = x, xend = xend, y = y, yend = yend), linetype = "dashed") +
+  geom_text(aes(x = Species_a, y = Species_b, label = paste("Site",1:4), hjust = -0.25)) +
+  coord_cartesian(xlim = c(0,10), ylim = c(0,10), expand = F) + 
+  theme_classic()
+
+```
+
