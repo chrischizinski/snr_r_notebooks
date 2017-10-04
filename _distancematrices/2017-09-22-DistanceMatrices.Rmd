@@ -1,0 +1,309 @@
+---
+title: "Applied multivariate:  Distance matrices"
+output:
+  html_notebook: default
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Load the libraries we will use today
+
+```{r message = FALSE}
+library(tidyverse)
+library(vegan)
+library(cluster)
+library(RColorBrewer)
+```
+
+## Similarity and distances
+
+To illustrate how the concept of similarity and distances, lets envision a data matrix with 4 sites and two species.  
+```{r}
+hyp_data <- matrix(c(1,9,1,8,6,6,9,1), byrow = TRUE, ncol = 2)
+colnames(hyp_data) <- c("Species_a", "Species_b")
+hyp_data
+```
+
+Lets plot the relationship of those species in 2-dimensional space.  
+
+```{r}
+ggplot(data = as.data.frame(hyp_data)) + 
+  geom_point(aes(x = Species_a, y = Species_b), size = 3, colour = "red") + 
+  geom_text(aes(x = Species_a, y = Species_b, label = paste("Site",1:4), hjust = -0.25)) +
+  coord_cartesian(xlim = c(0,10), ylim = c(0,10), expand = F) + 
+  theme_classic()
+```
+
+How can we quantify how similar each of these points are to each other?  One of the simplest method is to calculate the actual distance each point is from one another.
+
+
+```{r}
+euc_dist<- function(x,y){
+      x = x[1] - x[2]
+      y = y[1] - y[2]
+  h = sqrt(x^2 + y^2) #Pythagorean theorom 
+  return(h)
+}
+
+euc_dist(x = hyp_data[c(2,3),"Species_a"], y =hyp_data[c(2,3),"Species_b"])
+```
+
+Is this correct?  Sort of.  This function is not calculating all the distances we need.  We need to find the distances from all combinations.  Luckily, there is the `dist()` function.  
+
+```{r}
+dist(hyp_data)
+```
+
+```{r}
+
+data2 = cbind(data.frame(hyp_data),data.frame(x = 9, y = 1))
+
+ggplot(data = as.data.frame(hyp_data)) + 
+  geom_point(aes(x = Species_a, y = Species_b), size = 3, colour = "red") + 
+  geom_segment(data = data2,aes(x = x, xend = Species_a, y = y, yend = Species_b), linetype = "dashed") +
+  geom_text(aes(x = Species_a, y = Species_b, label = paste("Site",1:4), hjust = -0.25)) +
+  coord_cartesian(xlim = c(0,10), ylim = c(0,10), expand = F) + 
+  theme_classic()
+
+```
+
+### Common distance measures
+
+There are around 30 measures of similarities or distances ([Legendre & Legendre 2012](http://store.elsevier.com/Numerical-Ecology/P_-Legendre/isbn-9780444538680/)).  The choice on which one to use will be related to the type of data that you have, the question, and the analysis.  
+
+#### Euclidian distance
+
+$$ ED_{ij} = \sum_{i=1}^p \sqrt{(x_{ij} - x_{ik})^2} $$
+
+- Most appealing measure because it has true 'metric' properties
+- Column standardized to remove issues with scale
+- Applied to any data of any scale
+- Used in eigenvector ordinations (e.g., PCA)
+- Assumes variables are uncorrelated
+- Emphasizes outliers
+- Looses sensitivity with heterogeneous data
+- Distances not proportional
+
+
+```{r eucdist, echo=F}
+
+vegdist(hyp_data, method = "euclidean")
+
+```
+
+```{r}
+
+euc_dist <- as.data.frame(as.matrix(vegdist(hyp_data, method = "euclidean", diag = TRUE, upper = TRUE)))
+euc_dist$row <- rownames(euc_dist)
+
+euc_dist %>% 
+  gather(col, value, -row) %>% 
+  mutate(col = as.numeric(col),
+         row = as.numeric(row))-> bin_long
+```
+
+```{r}
+ggplot(data = bin_long) +
+  geom_raster(aes(x = col,y=row, fill = value)) +
+  scale_x_continuous(breaks = 1:4) + 
+  scale_y_continuous(breaks = 1:4) + 
+  coord_equal(expand = F) +
+  scale_fill_gradient(low = "blue", high = "red") +
+theme_classic() 
+```
+
+
+```{r}
+ggplot(data = bin_long) +
+  geom_raster(aes(x = col,y=row, fill = value)) +
+  scale_x_continuous(breaks = 1:4) + 
+  scale_y_continuous(breaks = 1:4) + 
+  coord_equal(expand = F) +
+  scale_fill_gradient2( low = "red", mid = "white", high = "blue", midpoint = 5) +
+theme_classic() 
+```
+
+
+#### City-block (Manhattan) distance
+
+- Most ecologically meaningful dissimilarities are Manhattan type
+- Less weight to outliers compared to ED
+- Retains sensitivity with heterogenous data
+- Distances not proportional
+
+
+```{r cbdist, echo=F}
+
+vegdist(hyp_data, method = "manhattan")
+
+```
+
+#### Proportional Distances
+
+- Manhattan distances expressed as a proportion to max distance
+- 2 communities with nothing in common would have dissimilarity of 1
+
+```{r propdist2}
+
+max_dist<-max(vegdist(hyp_data, method = "manhattan"))
+vegdist(hyp_data, method = "manhattan")/max_dist
+```
+
+#####  Sorensen or Bray-Curtis distance
+
+- Percent dissimilarity
+- Common with species data but can be used on any scale
+- Gives less weight to outliers compared to ED
+- Retains sensitivity with heterogeneous data
+- Maximum when there is no shared species
+- NOT metric and cannot be used with DA or CCA
+
+```{r}
+vegdist(hyp_data, method = "bray")
+```
+
+A few other proportional distances exist and differ in how they weight the dissimilarity.  Two examples are:
+
+- Jaccard distance
+
+```{r}
+vegdist(hyp_data, method = "jaccard")
+```
+
+- Kulcynski distance
+
+```{r}
+vegdist(hyp_data, method = "kulczynski")
+```
+
+#### Euclidean distances based on species profiles
+
+##### Chord distance
+
+- Similar conceptually to ED, but data are row normalized
+- Useful in species abundance data because it removes differences in abundance
+- Gives low weights to variables with low counts and many zeros
+
+```{r chorddist}
+
+vegdist(decostand(hyp_data,  method = "normalize"), method = "euclidean")
+
+```
+
+##### Chi-square distance
+
+- ED after completing a row chi-quare standardization 
+- Distance used in correspondence analysis (CA) and canonical correspondence analysis (CCA)
+
+
+```{r chidist}
+vegdist(decostand(hyp_data,  method = "chi.square"), method = "euclidean")
+```
+
+##### Species-profile distance
+
+- ED on relative abundances 
+- Variables with higher values and fewer zeros contribute more to distance calculations.
+
+```{r propdist}
+vegdist(decostand(hyp_data,  method = "total", MARGIN = 1), method = "euclidean")
+
+```
+
+
+##### Hellinger distances
+
+- ED on the Hellinger standardization 
+- Gives low weights to variables with low counts and many zeros
+
+```{r helldist}
+vegdist(decostand(hyp_data,  method = "hellinger"), method = "euclidean")
+```
+
+### Examples of distances on binary data
+
+```{r}
+set.seed(1234)
+pa_data<-matrix(c(sample(c(0,1), 8, replace = TRUE),
+                  sample(c(0,1),prob = c(0.65,0.35),8, replace = TRUE)),
+                byrow = TRUE, ncol = 4)
+```
+
+```{r}
+vegdist(pa_data, method = "jaccard", binary = TRUE)
+```
+
+##### Binomial
+
+-Null hypothesis that the two compared communities are equal
+
+```{r}
+vegdist(pa_data, method = "binomial", binary = TRUE)
+```
+
+
+##### Raup
+
+- Probabilistic index based on presence/absence data
+- Non-metric
+
+```{r}
+vegdist(pa_data, method = "raup", binary = TRUE)
+```
+
+
+### Categorial and mixed data
+
+##### Gowers distance
+
+For each variable type, a particular distance metric that works well for that type is used and scaled to fall between 0 and 1. 
+
+Then, a linear combination using user-specified weights (most simply an average) is calculated to create the final distance matrix. 
+
+The metrics used for each data type are described below:
+
+  - quantitative (interval): range-normalized Manhattan distance
+  - ordinal: variable is first ranked, then Manhattan distance is used with a special adjustment for ties
+  - nominal: variables of k categories are first converted into k binary columns and then the Dice coefficient is used
+  
+```{r}
+set.seed(123)
+# create nominal variable
+nom <- factor(rep(letters[1:3], each=3))
+# create binary variables
+bin <- as.matrix(replicate(2, rep(sample(c(0,1), 9, replace=T))))
+# create numeric variables
+vars <- as.matrix(replicate(3, rnorm(9)))
+df <- data.frame(nom, bin, vars)
+colnames(df) <- NULL
+df
+
+g_dist<-as.matrix(daisy(df, metric="gower", type=list(asymm=c(2,3))))
+g_dist
+```
+
+```{r}
+
+g_dist <- as.data.frame(g_dist)
+g_dist$row <- rownames(g_dist)
+
+g_dist %>% 
+  gather(col, value, -row) %>% 
+  mutate(col = as.numeric(col),
+         row = as.numeric(row))-> gdist_long
+```
+
+```{r}
+ggplot(data = gdist_long) +
+  geom_raster(aes(x = col,y=row, fill = value)) +
+  scale_x_continuous(breaks = 1:10) + 
+  scale_y_continuous(breaks = 1:10) + 
+  coord_equal(expand = F) +
+  scale_fill_gradient(low = "blue", high = "red") +
+theme_classic() 
+```
+
