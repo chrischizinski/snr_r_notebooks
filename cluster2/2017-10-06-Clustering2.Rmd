@@ -1,0 +1,329 @@
+---
+title: "Applied Multivariate:  Breaking multivariate data into groups. Part 2"
+output: html_notebook
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message = FALSE}
+library(tidyverse)
+library(cluster)
+library(vegan)
+library(factoextra)
+library(fpc)
+library(RWeka)
+library(ggdendro)
+library(NbClust)
+
+```
+
+## First lets load the data from last week
+
+```{r}
+data("USArrests")
+
+```
+
+Lets scale the data 
+```{r}
+USArrests %>% 
+  scale() -> arrest.scale
+
+head(arrest.scale)
+```
+
+lets convert this to a distance matrix using the `factoextra::get_dist()` function.
+
+```{r}
+arrest.scale %>% 
+  get_dist(upper = TRUE, diag = TRUE) -> arrest.dist
+```
+
+## Cluster analysis
+
+### Partitioning clustering
+
+#### K-means
+
+```{r}
+km.arrest <- kmeans(arrest.scale, centers = 3, nstart = 25)
+km.arrest
+```
+
+```{r}
+centers<-as.data.frame(km.arrest$centers)
+centers$cluster <- rownames(centers)
+
+centers %>% 
+  gather(type, value, -cluster) %>% 
+  ggplot() + 
+  geom_bar(aes(x = type, y = value, fill = type), position = "dodge", stat = "identity", colour = "black") +
+  facet_wrap(~cluster) +
+  theme_classic() +
+  theme(legend.position = "none")
+```
+
+
+So how would we describe these clusters?
+
+- Cluster 1:  Lower than average crime, above average urban population
+- Cluster 2:  Higher than average crime, and average urban population
+- Cluster 3:  Much lower than average crime with below average urban population
+
+We can get the exact stats from our scaled data
+
+```{r}
+
+attr(arrest.scale,"scaled:center")
+attr(arrest.scale,"scaled:scale")
+```
+
+
+
+Lets visualize these in ordination space. 
+
+We can use the `factoextra::fviz_cluster` to illustrate how these places fall out
+
+```{r}
+fviz_cluster(km.arrest, data = arrest.scale,
+             ellipse.type = "convex",
+             palette = "jco",
+             ggtheme = theme_minimal())
+```
+
+`factoextra::fviz_cluster` while quick can be clunky and difficult to get exactly how you would like your plot displayed.  Here is how you can break the data apart and plot yourself. 
+
+```{r}
+trythis<-stats::prcomp(arrest.scale, scale = FALSE, center = FALSE)
+state_scores<-as.data.frame(scores(trythis))
+state_scores$cluster <- km.arrest$cluster
+state_scores$state <- rownames(state_scores)
+head(state_scores)
+
+```
+
+Next we need to find which points fall on the outside of each group (i.e., hull).  We do this using the `chull()` command.
+
+```{r}
+chull(state_scores %>% filter(cluster ==1) %>% select(PC1, PC2) )
+
+grp.1 <- state_scores[state_scores$cluster == 1, ][chull(state_scores %>% filter(cluster ==1) %>% select(PC1, PC2) ), ]  # hull values for cluster 1
+
+grp.2 <- state_scores[state_scores$cluster == 2, ][chull(state_scores %>% filter(cluster ==2) %>% select(PC1, PC2) ), ]  # hull values for cluster 2
+
+grp.3 <- state_scores[state_scores$cluster == 3, ][chull(state_scores %>% filter(cluster ==3) %>% select(PC1, PC2) ), ]  # hull values for cluster 3
+
+all_hulls <- rbind(grp.1,grp.2,grp.3)
+head(all_hulls)
+```
+
+```{r}
+ggplot(data = state_scores) + 
+  geom_point(aes(x = PC1, y = PC2, color = as.factor(cluster))) +
+  geom_text(aes(x = PC1, y = PC2, color = as.factor(cluster), label = state))  +
+  geom_polygon(data = all_hulls, aes(x = PC1, y = PC2, fill = as.factor(cluster), colour =  as.factor(cluster)), alpha = 0.25) + 
+  theme_minimal() 
+```
+
+
+Above we chose to seperate the data into three clusters.  But how do we decide what is the appropriate number of clusters?
+
+There are four different ways this can be done:
+
+1. Cross validation.  A subset of the data is used to develop the model and then it is 'verfied' with the rest of the data by checking the sum of squared distances to the group centroids.  An average of the sum of square distances is then taken.  Best number of clusters should have the lowest average squared distance. 
+
+2. Elbow method.  Similar to a scree plot where you choose the "elbow" in the plot representing a decrease in the rate of change in variance 
+
+```{r}
+
+wss <- (nrow(arrest.scale)-1)*sum(apply(arrest.scale,2,var))
+
+nclusters = 15
+
+for(i in 2: nclusters){
+  wss[i]<-sum(kmeans(arrest.scale, centers = i, nstart = 25)$withinss)
+  
+}
+
+scree_data<-data.frame(wss = wss, clusters = 1:nclusters)
+
+head(scree_data)
+```
+
+And plot out the scree plot
+
+```{r}
+ggplot(data = scree_data) + 
+  geom_line(aes(x = clusters, y = wss)) +
+  geom_point(aes(x = clusters, y = wss), size = 3) +
+  scale_x_continuous(breaks = 1:nclusters) +
+  theme_classic()
+```
+
+The elbow in this plot is at 4, but you can see that this can be a  little tricky in finding the "elbow"
+
+3. Silouette method, returns a value -1 to 1 based on the similarity of an observatioin within its own cluster and compared across clusters. A high value would indicate a strong match. 
+
+```{r}
+fviz_nbclust(arrest.scale, kmeans,
+             method = "silhouette")
+```
+
+
+There is also a type of clustering, that clusters around a mediod rather than a centroid.  In using, PAM clustering each cluster is represented by one of the objects in the cluster. PAM is less sensitive to outliers compared to k-means
+
+```{r}
+pamkout<-fpc::pamk(arrest.scale, krange = 2:15)
+pamkout
+
+```
+
+
+```{r}
+
+medoid_data <- data.frame(pamkout$pamobject$medoids)
+medoid_data$state<-rownames(medoid_data)
+
+medoid_data %>% 
+  gather(type, value, -state) %>% 
+  ggplot() + 
+  geom_bar(aes(x = type, y = value, fill = type), position = "dodge", stat = "identity", colour = "black") +
+  facet_wrap(~state) +
+  theme_classic() +
+  theme(legend.position = "none")
+
+```
+
+
+4. X means clustering.  Similary to the k means clustering but uses Bayesian Information criteria to identify the best split. 
+
+```{r}
+# WPM("refresh-cache")
+# WPM("list-packages", "available")
+# WPM("install-package", "XMeans")
+
+xout<-XMeans(arrest.scale)
+xout
+
+xout$class_ids
+```
+
+```{r}
+
+xcenters<-data.frame(cluster = 1:2,matrix(c(1.004934034580132, 1.0138273518643042,0.19758526759992892,0.8469650134151087,-0.6699560230534215, -0.675884901242869,-0.1317235117332867,-0.564643342276739), byrow = TRUE, ncol = 4))
+names(xcenters)[2:5]<- colnames(arrest.scale)
+
+xcenters %>% 
+  gather(type, value, -cluster) %>% 
+  ggplot() + 
+  geom_bar(aes(x = type, y = value, fill = type), position = "dodge", stat = "identity", colour = "black") +
+  facet_wrap(~cluster) +
+  theme_classic() +
+  theme(legend.position = "none")
+```
+
+There is another type of partitioning clustering, called clara and is used primarily for large datasets.  We will not be discussing in this class, but there is a function `cluster::clara()` (among some others) to be used when clustering "big data".
+
+### Hierarchical clustering
+
+Two main types of hierarchical clustering
+
+1. Agglomerative clustering.  Treats each observation as own cluster and then begins to merge into new clusters until all are merged into a new cluster.  Upside down tree. This is the most common type of hierarchical clustering. 
+
+
+
+```{r}
+USArrests %>% 
+  scale() %>% 
+  dist(method = "euclidian") -> arrest.euc
+
+arrest_clust<-hclust(arrest.euc, method = "ward.D2")
+
+arrest_clust
+
+```
+
+We have several options to plot our dendrograms.
+
+```{r}
+plot(arrest_clust)
+```
+
+
+```{r}
+fviz_dend(arrest_clust, 
+          k = 2, # two groups
+          cex = 0.5) # label size
+```
+
+
+```{r}
+ggdendrogram(arrest_clust,rotate=TRUE, size = 1)
+```
+
+
+Or extract the data and build your own plot
+
+```{r}
+arrest_dendro  <- as.dendrogram(arrest_clust)
+
+dend_dendro_data <- dendro_data(arrest_dendro, type = "rectangle")
+
+names(dend_dendro_data)
+
+head( dend_dendro_data$segments)
+
+
+ggplot(data = dend_dendro_data$segments)+
+  geom_segment(aes(x = x, y = y, xend = xend, yend=yend), size =1, colour = "red") + 
+  theme_void()
+
+head( dend_dendro_data$labels)
+
+ggplot(data = dend_dendro_data$segments)+
+  geom_segment(aes(x = x, y = y, xend = xend, yend=yend), size =1, colour = "red") + 
+  geom_text(data = dend_dendro_data$labels, aes(x = x, y = y, label = label), colour = "blue", hjust = 1, angle = 90, size =3) +
+  coord_cartesian(ylim=c(-3,15)) +
+  theme_void()
+
+```
+
+Choosing the appropriate number of clusters
+
+```{r}
+NbClust(arrest.scale,
+        distance = "euclidean",
+        min.nc = 2, max.nc = 10,
+        method = "complete", index ="all") -> arrest.nb
+```
+
+```{r}
+fviz_nbclust(arrest.nb, ggtheme = theme_minimal())
+```
+
+2. Divisive clustering.  Start with one cluster and then begin breaking apart into more similar clusters. 
+
+```{r}
+
+res.diana <- diana(USArrests, stand = TRUE)
+res.diana
+
+```
+
+```{r}
+fviz_dend(res.diana, cex = 0.5,
+          k = 4, # Cut in four groups
+          palette = "jco" # Color palette
+          )
+```
+
+
+ 
+
+
+
+
