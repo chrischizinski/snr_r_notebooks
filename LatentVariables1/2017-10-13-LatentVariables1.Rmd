@@ -4,7 +4,91 @@ csl: the-journal-of-wildlife-management.csl
 output:
   html_notebook: default
 bibliography: bibliography.bib
+editor_options: 
+  chunk_output_type: inline
 ---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message = FALSE}
+library(psych)
+```
+
+## Answers to the challenge
+
+```{r}
+library(tidyverse)
+library(ggdendro)
+library(NbClust)
+
+data("USArrests")
+
+USArrests %>% 
+  scale() -> arrest.scale
+
+arrest.scale %>% 
+  dist(method = "euclidean") -> arrest.euc
+
+arrest_hclust <- hclust(arrest.euc, method = "ward.D2")
+
+### Find the best number of clusters
+arrest.nb <- NbClust(arrest.scale, 
+        distance = "euclidean", 
+        min.nc = 2, 
+        max.nc = 10, 
+        method = "complete", 
+        index = "all")
+
+clusters <- data.frame(arrest.nb$Best.partition)
+clusters$state <- rownames(clusters)
+colnames(clusters) <- c("cluster", "label")
+
+### extract the data
+arrest_dendro <- as.dendrogram(arrest_hclust)
+
+### convert data to dendro data for ggplot
+arrest_dendro_data <- dendro_data(arrest_dendro, type = "rectangle")
+
+### combine cluster and dendro label data 
+arrest_dendro_labels <- data.frame(full_join(arrest_dendro_data$labels, clusters))
+
+arrest_dendro_segs <- data.frame(arrest_dendro_data$segments) 
+arrest_dendro_segs$cluster <- ifelse(arrest_dendro_segs$x < 20 & arrest_dendro_segs$xend < 20, 1, 2)
+
+### plot 
+arrest_dendro_plot<-ggplot() + 
+                      geom_segment(data = arrest_dendro_segs, aes(x = x, y = y, xend = xend, yend = yend, color = as.factor(cluster))) + 
+                      geom_text(data = arrest_dendro_labels, aes(x = x, y = y, label = label, color = as.factor(cluster)), angle = 90, hjust = 1, size = 1.7, show.legend = FALSE) +
+                      labs(color="Cluster") +  
+                      coord_cartesian(ylim = c(-5,15)) +
+                      theme_void() + 
+                      scale_colour_manual(values = c("1" = "firebrick", "2" = "dodgerblue")) +
+                      theme(plot.margin = margin(0.5, 0.5, 1, 0.5, unit = "cm")
+                      )
+
+
+arrest_dendro_plot
+```
+
+## A quick word about eigenvectors and values
+
+[Eigenvectors and Eigenvalues](http://setosa.io/ev/eigenvectors-and-eigenvalues/)
+
+For any number set of points, we can digest these points into eigenvectors and  eigenvalue.  Eigenvectors and eigenvalues exist in pairs with eigenvector describes a direction along which a linear transformation acts simply by "stretching/compressing" and/or "flipping"; and eigenvalue describing the degree of that transformation in that direction.  The numbers of eigenvectors is equal to the number of dimensions of your data.  
+
+```{r}
+mat<-matrix(c(3,2,1,2), byrow = TRUE, ncol = 2)
+
+eigen(mat)
+```
+
+# Latent variable analysis
+
+## Factor analysis
+
 
 The source to many of the notes in this lesson (and a lot more detail on the subject) can be found at @finch2015latent and @beaujean2014latent.  
 
@@ -35,7 +119,7 @@ popular orthogonal rotation method is VARIMAX, while among the oblique rotations
 2.  Scree plots.  Eigenvalues on the y-axis and number of factors on the x axis.  Identify where the plot "flattens out"
 3. Proportion of variance.  Identify when there is no "appreciative"  gain in the percentage of variance explained.  Similar to scree plot
 4. Residual correlation matrix for the observed indicators. residuals larger than 0.05 are considered to be too large, so that a good solution is one which produces few residual correlations greater than 0.05 in absolute value.
-5. Parallel analysis.  Described in @horn1965rationale
+5. Parallel analysis.  Described in @horn1965rationale.  Several steps that include comparing the actual data to  two randomly generated datasets.  THis is the most commonly used. 
 
 ### The data 
 
@@ -71,15 +155,62 @@ head(goal_scale)
 ```
 
 
+### Fit an EFA models with `factanal`
 
 ```{r}
-plot(cars)
+
+agoal.efa<-factanal(~ags1+ags2+ags3+ags4+ags5+ags6+ags7+ags8+ags9+ags10+ags11+ ags12, factors=4, rotation="promax", data = goal_scale )
+
+agoal.efa
+
 ```
 
-Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
+#### Uniqueness 
 
-When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file). 
+Uniqueness reflects the proportion of variance in the indicators that are not explained by the factors.  For example, `r round(agoal.efa$uniquenesses[1], digits = 3)*100 `% of variation in `ags1` is not explained by the four factors. 
 
-The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+
+```{r}
+agoal.efa$uniquenesses
+```
+
+The opposite of uniqueness of communality, and this is the proportion of variances explained by the factors for each indicator.
+
+```{r}
+1-agoal.efa$uniquenesses
+```
+
+
+#### Loadings
+
+```{r}
+ld<-loadings(agoal.efa)
+ld
+
+```
+To help interpret our loadings, lets create a visualization of those loadings.  
+
+```{r}
+loadings<-as.data.frame(ld[,])
+
+lt<- data.frame(indicator = paste("ags",1:12, sep =""),
+           latent_traits = c("MAP", "MAV", "PAP", "PAV", "MAP","MAV", "MAP", "PAV", "PAP", "PAV", "PAP", "MAV"))
+
+loadings %>% 
+  rownames_to_column("indicator") %>% 
+  left_join(lt) %>% 
+  mutate(indicator = factor(indicator, levels = paste("ags",12:1, sep =""))) %>% 
+  gather(factor, value, -indicator, - latent_traits) %>% 
+  mutate(value2 = ifelse(value < 0.1, NA,  value))-> loadings.long 
+
+
+ggplot(data = loadings.long) +
+  geom_point(aes(x = factor, y = indicator, color = value2, shape = latent_traits), size = 8) +
+  scale_colour_gradient(na.value = "white", low = "blue", high = "red") +
+  scale_shape_manual(values = c("MAP" = 15, "MAV" = 16, "PAP" = 17, "PAV" = 18)) +
+  labs(color = "Loading", shape = "Latent\ntrait") +
+  theme_classic()
+```
+
 
 ## References
