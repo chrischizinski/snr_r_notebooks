@@ -1,0 +1,153 @@
+---
+title: "Applied Multivariate: Identifying differences between groups"
+output:
+  html_notebook: default
+  html_document:
+    df_print: paged
+editor_options:
+  chunk_output_type: inline
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.width = 6)
+```
+
+```{r message = FALSE}
+library(vegan) 
+library(gridExtra)
+library(tidyverse)
+```
+
+
+## Linear discriminant analysis
+
+- Often we have groups that we have defined *a priori* before doing an analysis and we seek to understand what makes those groups different
+
+- Linear discrimination analysis (LDA), similar to multinomial logistic regression, attempts to find linear combinations of variables that best separate groups when predicting two or more dependent variables, using continuous independent variables. 
+
+### Load the data
+
+We will use the data set `morph_data.csv` on [github](). The data consisted of  8 measurements in all 5
+larval stages and the adults of the 6 species of the waterstrider 
+genus Limnoporus (Insecta: Heteroptera: Gerridae). Data was originally sourced from [morphometry datasets](http://life.bio.sunysb.edu/morph/data/datasets.html).
+
+The variables are:  Species, stage (1-5 for larvae, 6 for adults), sex (m male, f female, u undetermined), antseg1 - antseg4 (lengths of 1st to 4th antennal segments), midfem, midtib, hindfem, hindtib (lenghts of middle and hind femora and tibiae).
+The values are raw measurements in millimeters.
+
+```{r}
+morph_data <-read_csv("https://raw.githubusercontent.com/chrischizinski/SNR_R_Group/master/data/morph_data.csv")
+
+glimpse(morph_data)
+
+```
+
+### Manipulate the data
+
+For the purpose of this excercise lets limit the data to one species and only the measurements of the antennae. 
+
+```{r}
+morph_data %>% 
+  select(Species:antseg4, -sex) %>% 
+  filter(Species == "canali") %>% 
+  mutate_at(vars(antseg1:antseg4), scale)-> canal_data
+
+head(canal_data)
+```
+
+### Conduct the linear discriminant analysis using `MASS::lda()`
+
+```{r}
+canal_lda<-MASS::lda(stage~antseg1 + antseg2 + antseg3 + antseg4, data = canal_data)
+
+canal_lda
+names(canal_lda)
+```
+
+### Explanation of the output
+
+#### Prior
+
+From the raw data, the break down in proportions of the number of individuals in each group
+
+```{r}
+canal_lda$prior
+```
+
+#### Group means
+The mean value for each of the variables for each group
+
+```{r}
+canal_lda$means
+```
+
+#### Coefficients
+
+These are the coffeicients to describe the linear discrimination. For example: LD1 = `r canal_lda$scaling[1]` x Group1 + `r canal_lda$scaling[2]` x Group2 + `r canal_lda$scaling[3]` x Group3 + ...
+
+```{r}
+canal_lda$scaling
+
+```
+
+You can also standardize the coefficients (loadings), which provides the relative strength of each factor on linear discriminant analysis
+
+```{r}
+loadings <-canal_lda$scaling
+col.ss <- colSums(loadings^2)
+sweep(loadings,2,sqrt(col.ss),"/")
+```
+
+
+### Variation expained
+
+The amount of variation explained by the each of the linear discriminant axis
+
+```{r}
+prop = canal_lda$svd^2/sum(canal_lda$svd^2)
+prop
+```
+
+
+### Graphing the results
+
+```{r}
+
+# extracting the data
+lda_pred <- predict(canal_lda)
+lda_scores<-data.frame(stage = lda_pred$class, lda_pred$x)
+
+#developing hulls for each stage group
+
+hull1<- lda_scores[lda_scores$stage ==1,][chull(lda_scores[lda_scores$stage ==1,c("LD1", "LD2")]),]
+hull2<- lda_scores[lda_scores$stage ==2,][chull(lda_scores[lda_scores$stage ==2,c("LD1", "LD2")]),]
+hull3<- lda_scores[lda_scores$stage ==3,][chull(lda_scores[lda_scores$stage ==3,c("LD1", "LD2")]),]
+hull4<- lda_scores[lda_scores$stage ==4,][chull(lda_scores[lda_scores$stage ==4,c("LD1", "LD2")]),]
+hull5<- lda_scores[lda_scores$stage ==5,][chull(lda_scores[lda_scores$stage ==5,c("LD1", "LD2")]),]
+hull6<- lda_scores[lda_scores$stage ==6,][chull(lda_scores[lda_scores$stage ==6,c("LD1", "LD2")]),]
+
+all_hulls <- rbind(hull1, hull2, hull3, hull4, hull5, hull6)
+
+#plot using gglot2
+
+ggplot(data = lda_scores) + 
+  geom_point(aes(x = LD1, y = LD2, color = stage), size = 2) +
+  geom_polygon(data = all_hulls,aes(x = LD1, y = LD2, color = stage, fill = stage), alpha = 0.25) +
+  coord_equal() + 
+  theme_classic()
+```
+
+### Assessing the accuracy of the predicitions
+
+```{r}
+ct <- table(canal_data$stage, lda_pred$class)
+ct
+# percent correct for each stage
+diag(prop.table(ct, 1))
+
+# total percent correct
+sum(diag(prop.table(ct)))
+```
+
+
+
