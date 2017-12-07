@@ -1,13 +1,9 @@
 ---
 title: 'Applied Multivariate:  Latent variable analysis'
-output:
-  html_notebook: default
-  html_document:
-    df_print: paged
-editor_options:
+output: html_notebook
+editor_options: 
   chunk_output_type: inline
 ---
-
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
